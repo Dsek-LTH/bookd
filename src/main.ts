@@ -1,18 +1,27 @@
 import * as express from "express";
 import * as graphqlHTTP from "express-graphql";
 import { buildSchema, graphql } from "graphql";
-// import GraphQLDateTime from 'graphql-type-datetime';
 import {
       GraphQLDate,
       GraphQLDateTime,
       GraphQLTime,
 } from "graphql-iso-date";
-// import { GraphQLScalarType } from 'graphql';
 import { makeExecutableSchema } from "graphql-tools";
 import * as mysql from "mysql";
 import * as pg from "pg";
 
+const getBookingItems = (source: IBooking) =>
+    queryPromise(`
+        SELECT *
+        FROM bookables
+        INNER JOIN bookable_bookings ON (bookables.id = bookable_bookings.bookable_id)
+        WHERE booking_id = $1`, [source.id])
+    .then((results) => { console.log("booking items", results.rows); return results.rows; });
+
 const resolvers = {
+    Booking: {
+        items: getBookingItems,
+    },
     DateTime: GraphQLDateTime,
 };
 
