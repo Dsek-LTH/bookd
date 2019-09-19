@@ -1,0 +1,27 @@
+version: '3'
+services:
+  bookd-service:
+    image: dsek/bookd:latest
+    ports:
+      - "8084:8084"
+    depends_on:
+      - db
+    environment:
+      PG_HOST: db
+      PG_DATABASE: bookd
+      PG_USER: testuser
+      PG_PASSWORD: password
+      NODE_ENV: development
+    build:
+      context: .
+  db:
+    image: postgres:11
+    ports:
+      - "5432"
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: testuser
+      POSTGRES_DB: bookd
+    volumes:
+      - "./database_init/:/docker-entrypoint-initdb.d/:ro"
+      - "./pgdata:/var/lib/postgresql/data/:rw"
