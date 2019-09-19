@@ -12,11 +12,18 @@ import { makeExecutableSchema } from "graphql-tools";
 import * as mysql from "mysql";
 import * as pg from "pg";
 
+const resolvers = {
+    DateTime: GraphQLDateTime,
+};
+
 const schema = makeExecutableSchema({
-                                     resolvers: {DateTime: GraphQLDateTime},
+                                     resolvers,
                                      typeDefs: `
 scalar DateTime
 
+type Mutation {
+  addBooking(title: String!, booker_id: String!, start_time: DateTime!, end_time: DateTime!): Booking,
+}
 type Query {
   bookings(page: Int, maxItems: Int): [Booking!]!,
   activeBookings(page: Int, maxItems: Int): [Booking!]!,
@@ -45,8 +52,8 @@ interface IBooking {
     id: number;
     title: string;
     items: IBookable[];
-    start_time: Date;
-    end_time: Date;
+    start_time: string;
+    end_time: string;
     booker_id: string;
 }
 
@@ -59,6 +66,13 @@ interface IBookable {
 }
 
 type Paging = {page: number, maxItems: number};
+type BookingInput = {
+    title: string,
+    booker_id: string,
+    start_time: Date,
+    end_time: Date,
+    items: number[],
+};
 
 const pool = new pg.Pool({
     database        : process.env.PG_DATABASE,
@@ -67,7 +81,49 @@ const pool = new pg.Pool({
     user            : process.env.PG_USER,
 });
 
-const getBookables = (args: {page: number, maxItems: number}): Promise<IBookable[]> => {
+const insertBooking = (args: BookingInput): Promise<IBooking[]> => {
+    const {title, booker_id, start_time, end_time, items} = args;
+    console.log("title", title);
+    console.log("booker_id", booker_id);
+    console.log("start_time", start_time);
+    console.log("end_time", end_time);
+    console.log("items", items);
+    return new Promise((resolve: any, reject: any) => pool.query(`
+        INSERT INTO bookings (title, booker_id, start_time, end_time)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *;`, [title, booker_id, start_time, end_time], (error, results) => {
+        console.log("error", error);
+        if (error) { return reject(error); }
+        console.log("results", results);
+        if (results.rows.length < 1) { return reject("Insert failed"); }
+        results.rows.forEach((value: any) => {
+            console.log("value", value);
+        });
+        return resolve(results.rows[0]);
+    }),
+    );
+};
+
+const getBookings = (args: Paging): Promise<IBooking[]> => {
+    const {page, maxItems} = args;
+    console.log("page", page);
+    console.log("maxItems", maxItems);
+    return new Promise((resolve: any, reject: any) => pool.query(`
+    SELECT id, title, booker_id, start_time, end_time
+    FROM bookings
+    ORDER BY title, id
+    LIMIT $1 OFFSET $2;`, [maxItems, page * maxItems], (error, results) => {
+        console.log("error", error);
+        if (error) { return reject(error); }
+        results.rows.forEach((value: any) => {
+            console.log("value", value);
+        });
+        return resolve(results.rows);
+    }),
+    );
+};
+
+const getBookables = (args: Paging): Promise<IBookable[]> => {
     const {page, maxItems} = args;
     console.log("page", page);
     console.log("maxItems", maxItems);
@@ -87,7 +143,7 @@ const getBookables = (args: {page: number, maxItems: number}): Promise<IBookable
 };
 
 const getBookablesOfType = (bookableType: "lokal" | "inventarie",
-                            args: {page: number, maxItems: number},
+                            args: Paging,
 ): Promise<IBookable[]> => {
     const {page, maxItems} = args;
     console.log("page", page);
@@ -109,7 +165,9 @@ const getBookablesOfType = (bookableType: "lokal" | "inventarie",
 };
 
 const root = {
+    addBooking: insertBooking,
     bookables: getBookables,
+    bookings: getBookings,
     facilities: (args: Paging) => getBookablesOfType("lokal", args),
     inventories: (args: Paging) => getBookablesOfType("inventarie", args),
 };

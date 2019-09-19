@@ -8,10 +8,8 @@ CREATE TABLE bookings (
     id SERIAL primary key,
     title TEXT NOT NULL,
     booker_id TEXT NOT NULL DEFAULT '',
-    start_date DATE NOT NULL,
-    start_time TIME NOT NULL,
-    end_date DATE NOT NULL,
-    end_time TIME NOT NULL
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL
 );
 CREATE TABLE bookable_bookings (
     bookable_id INT NOT NULL REFERENCES bookables(id),
