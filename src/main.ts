@@ -16,9 +16,20 @@ const getBookingItems = (source: IBooking) =>
         FROM bookables
         INNER JOIN bookable_bookings ON (bookables.id = bookable_bookings.bookable_id)
         WHERE booking_id = $1`, [source.id])
-    .then((results) => { console.log("booking items", results.rows); return results.rows; });
+    .then((results) => results.rows);
+
+const getBookableBookings = (source: IBookable) =>
+    queryPromise(`
+        SELECT *
+        FROM bookings
+        INNER JOIN bookable_bookings ON (bookings.id = bookable_bookings.booking_id)
+        WHERE bookable_id = $1`, [source.id])
+    .then((results) => results.rows);
 
 const resolvers = {
+    Bookable: {
+        bookings: getBookableBookings,
+    },
     Booking: {
         items: getBookingItems,
     },
