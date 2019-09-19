@@ -22,7 +22,9 @@ const schema = makeExecutableSchema({
 scalar DateTime
 
 type Mutation {
-  addBooking(title: String!, booker_id: String!, start_time: DateTime!, end_time: DateTime!): Booking,
+  addBooking(title: String!, booker_id: String!,
+    start_time: DateTime!, end_time: DateTime!, item_ids: [Int!]!
+  ): Booking,
 }
 type Query {
   bookings(page: Int, maxItems: Int): [Booking!]!,
@@ -32,6 +34,7 @@ type Query {
 }
 
 type Booking {
+  id: Int!,
   title: String!
   items: [Bookable!]!,
   start_time: DateTime!,
@@ -40,6 +43,7 @@ type Booking {
 }
 
 type Bookable {
+  id: Int!,
   title: String!,
   description: String!,
   bookings: [Booking!]!,
@@ -71,7 +75,7 @@ type BookingInput = {
     booker_id: string,
     start_time: Date,
     end_time: Date,
-    items: number[],
+    item_ids: number[],
 };
 
 const pool = new pg.Pool({
@@ -81,33 +85,50 @@ const pool = new pg.Pool({
     user            : process.env.PG_USER,
 });
 
+const expand = (rowCount: number, columnCount: number, startAt: number = 1) => {
+    let index = startAt;
+    return Array(rowCount).fill(0).map((v) =>
+      `(${Array(columnCount).fill(0).map((v2) =>
+          `$${index++}`).join(", ")
+      })`).join(", ");
+};
+
+const flatten = (list: any[]): any[] => list.reduce(
+    (a: any, b: any) => a.concat(Array.isArray(b) ? flatten(b) : b), [],
+);
+
+const queryPromise = (query: string, values: any[]): Promise<pg.QueryResult> =>
+    new Promise((resolve: any, reject: any) =>
+        pool.query(query, values, (error, result) => {
+            if (error) {
+                return reject(error);
+            } else {
+                return resolve(result);
+            }}));
+
 const insertBooking = (args: BookingInput): Promise<IBooking[]> => {
-    const {title, booker_id, start_time, end_time, items} = args;
-    console.log("title", title);
-    console.log("booker_id", booker_id);
-    console.log("start_time", start_time);
-    console.log("end_time", end_time);
-    console.log("items", items);
-    return new Promise((resolve: any, reject: any) => pool.query(`
+    const {title, booker_id, start_time, end_time, item_ids} = args;
+    return queryPromise(`
         INSERT INTO bookings (title, booker_id, start_time, end_time)
         VALUES ($1, $2, $3, $4)
-        RETURNING *;`, [title, booker_id, start_time, end_time], (error, results) => {
-        console.log("error", error);
-        if (error) { return reject(error); }
-        console.log("results", results);
-        if (results.rows.length < 1) { return reject("Insert failed"); }
+        RETURNING *;`, [title, booker_id, start_time, end_time])
+    .then((results: pg.QueryResult) => {
+        if (results.rows.length < 1) { throw new Error("Insert failed"); }
         results.rows.forEach((value: any) => {
             console.log("value", value);
         });
-        return resolve(results.rows[0]);
-    }),
-    );
+        return results.rows[0];
+    }).then(async (booking) => {
+        const rows = item_ids.map((item) => [item, booking.id]);
+        await queryPromise(`
+            INSERT INTO bookable_bookings (bookable_id, booking_id)
+            VALUES ${expand(item_ids.length, 2)}`, flatten(rows));
+        return booking;
+    });
 };
 
 const getBookings = (args: Paging): Promise<IBooking[]> => {
     const {page, maxItems} = args;
-    console.log("page", page);
-    console.log("maxItems", maxItems);
     return new Promise((resolve: any, reject: any) => pool.query(`
     SELECT id, title, booker_id, start_time, end_time
     FROM bookings
@@ -125,8 +146,6 @@ const getBookings = (args: Paging): Promise<IBooking[]> => {
 
 const getBookables = (args: Paging): Promise<IBookable[]> => {
     const {page, maxItems} = args;
-    console.log("page", page);
-    console.log("maxItems", maxItems);
     return new Promise((resolve: any, reject: any) => pool.query(`
     SELECT id, title, description, bookable_type
     FROM bookables
@@ -146,8 +165,6 @@ const getBookablesOfType = (bookableType: "lokal" | "inventarie",
                             args: Paging,
 ): Promise<IBookable[]> => {
     const {page, maxItems} = args;
-    console.log("page", page);
-    console.log("maxItems", maxItems);
     return new Promise((resolve: any, reject: any) => pool.query(`
     SELECT id, title, description, bookable_type
     FROM bookables
