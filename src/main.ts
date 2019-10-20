@@ -7,7 +7,6 @@ import {
       GraphQLTime,
 } from "graphql-iso-date";
 import { makeExecutableSchema } from "graphql-tools";
-import * as mysql from "mysql";
 import * as pg from "pg";
 
 const getBookingItems = (source: IBooking) =>
