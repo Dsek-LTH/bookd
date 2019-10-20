@@ -44,12 +44,15 @@ type Mutation {
   addBooking(title: String!, booker_id: String!,
     start_time: DateTime!, end_time: DateTime!, item_ids: [Int!]!
   ): Booking,
+  "For accepting a booking. Can also unaccept by setting 'accept' to false"
+  setAccepted(id: Int!, accept: Boolean! = true): Booking,
 }
 type Query {
   bookings(page: Int, maxItems: Int): [Booking!]!,
   activeBookings(page: Int, maxItems: Int): [Booking!]!,
-  facilities(page: Int, maxItems: Int): [Bookable!]!,
-  inventories(page: Int, maxItems: Int): [Bookable!]!,
+  acceptedBookings(page: Int = 0, maxItems: Int = 20): [Booking!]!,
+  facilities(page: Int = 0, maxItems: Int = 20): [Bookable!]!,
+  inventories(page: Int = 0, maxItems: Int = 20): [Bookable!]!,
 }
 
 type Booking {
@@ -59,6 +62,7 @@ type Booking {
   start_time: DateTime!,
   end_time: DateTime!,
   booker_id: String!,
+  accepted: Boolean!,
 }
 
 type Bookable {
@@ -78,6 +82,7 @@ interface IBooking {
     start_time: string;
     end_time: string;
     booker_id: string;
+    accepted: boolean;
 }
 
 interface IBookable {
@@ -146,11 +151,42 @@ const insertBooking = (args: BookingInput): Promise<IBooking[]> => {
     });
 };
 
+const acceptBooking = (args: {id: number, accept: boolean}): Promise<IBooking> => {
+    const {id, accept} = args;
+    return queryPromise(`
+        UPDATE bookings
+        SET accepted = $1
+        WHERE id = $2
+        RETURNING *;`, [accept, id])
+    .then((results: pg.QueryResult) => {
+        if (results.rows.length < 1) { throw new Error("Update failed"); }
+        return results.rows[0];
+    });
+};
+
 const getBookings = (args: Paging): Promise<IBooking[]> => {
     const {page, maxItems} = args;
     return new Promise((resolve: any, reject: any) => pool.query(`
-    SELECT id, title, booker_id, start_time, end_time
+    SELECT id, title, booker_id, start_time, end_time, accepted
     FROM bookings
+    ORDER BY title, id
+    LIMIT $1 OFFSET $2;`, [maxItems, page * maxItems], (error, results) => {
+        console.log("error", error);
+        if (error) { return reject(error); }
+        results.rows.forEach((value: any) => {
+            console.log("value", value);
+        });
+        return resolve(results.rows);
+    }),
+    );
+};
+
+const getAcceptedBookings = (args: Paging): Promise<IBooking[]> => {
+    const {page, maxItems} = args;
+    return new Promise((resolve: any, reject: any) => pool.query(`
+    SELECT id, title, booker_id, start_time, end_time, accepted
+    FROM bookings
+    WHERE accepted = true
     ORDER BY title, id
     LIMIT $1 OFFSET $2;`, [maxItems, page * maxItems], (error, results) => {
         console.log("error", error);
@@ -201,11 +237,13 @@ const getBookablesOfType = (bookableType: "lokal" | "inventarie",
 };
 
 const root = {
+    acceptedBookings: getAcceptedBookings,
     addBooking: insertBooking,
     bookables: getBookables,
     bookings: getBookings,
     facilities: (args: Paging) => getBookablesOfType("lokal", args),
     inventories: (args: Paging) => getBookablesOfType("inventarie", args),
+    setAccepted: acceptBooking,
 };
 
 const port = 8084;

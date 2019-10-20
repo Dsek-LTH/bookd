@@ -9,7 +9,8 @@ CREATE TABLE bookings (
     title TEXT NOT NULL,
     booker_id TEXT NOT NULL DEFAULT '',
     start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL
+    end_time TEXT NOT NULL,
+    accepted BOOLEAN NOT NULL DEFAULT false
 );
 CREATE TABLE bookable_bookings (
     bookable_id INT NOT NULL REFERENCES bookables(id),
