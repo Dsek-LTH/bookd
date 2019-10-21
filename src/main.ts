@@ -1,3 +1,4 @@
+import { HasRoleDirective, IsAuthenticatedDirective } from "@dsek/graphql-auth-directives-unsigned";
 import * as express from "express";
 import * as graphqlHTTP from "express-graphql";
 import { buildSchema, graphql } from "graphql";
@@ -7,6 +8,7 @@ import {
       GraphQLTime,
 } from "graphql-iso-date";
 import { makeExecutableSchema } from "graphql-tools";
+import { IncomingMessage } from "http";
 import * as pg from "pg";
 
 const getBookingItems = (source: IBooking) =>
@@ -25,27 +27,31 @@ const getBookableBookings = (source: IBookable) =>
         WHERE bookable_id = $1`, [source.id])
     .then((results) => results.rows);
 
-const resolvers = {
-    Bookable: {
-        bookings: getBookableBookings,
-    },
-    Booking: {
-        items: getBookingItems,
-    },
-    DateTime: GraphQLDateTime,
+process.env.AUTH_DIRECTIVES_ROLE_TYPE = "BookingRole";
+const schemaDirectives = {
+    hasRole: HasRoleDirective,
+    isAuthenticated: IsAuthenticatedDirective,
 };
 
-const schema = makeExecutableSchema({
-                                     resolvers,
-                                     typeDefs: `
+const typeDefs = `
 scalar DateTime
 
+directive @isAuthenticated on OBJECT | FIELD_DEFINITION
+directive @hasRole(roles: [BookingRole]) on OBJECT | FIELD_DEFINITION
+
+enum BookingRole {
+  TEST_PERMISSION
+}
+
 type Mutation {
-  addBooking(title: String!, booker_id: String!,
-    start_time: DateTime!, end_time: DateTime!, item_ids: [Int!]!
-  ): Booking,
+  addBooking(title: String!, start_time: DateTime!,
+    end_time: DateTime!, item_ids: [Int!]!
+  ): Booking
+  @isAuthenticated,
+
   "For accepting a booking. Can also unaccept by setting 'accept' to false"
-  setAccepted(id: Int!, accept: Boolean! = true): Booking,
+  setAccepted(id: Int!, accept: Boolean! = true): Booking
+  @hasRole(roles: [TEST_PERMISSION]),
 }
 type Query {
   bookings(page: Int, maxItems: Int): [Booking!]!,
@@ -53,6 +59,7 @@ type Query {
   acceptedBookings(page: Int = 0, maxItems: Int = 20): [Booking!]!,
   facilities(page: Int = 0, maxItems: Int = 20): [Bookable!]!,
   inventories(page: Int = 0, maxItems: Int = 20): [Bookable!]!,
+  bookables(page: Int = 0, maxItems: Int = 20): [Bookable!]!,
 }
 
 type Booking {
@@ -72,8 +79,11 @@ type Bookable {
   bookings: [Booking!]!,
   bookable_type: String!,
 }
-`,
-});
+schema {
+  query: Query
+  mutation: Mutation
+}
+`;
 
 interface IBooking {
     id: number;
@@ -130,12 +140,18 @@ const queryPromise = (query: string, values: any[]): Promise<pg.QueryResult> =>
                 return resolve(result);
             }}));
 
-const insertBooking = (args: BookingInput): Promise<IBooking[]> => {
-    const {title, booker_id, start_time, end_time, item_ids} = args;
+type User = {
+    userid: string,
+    permissions: string[],
+};
+
+const insertBooking = (_: any, args: BookingInput, ctx: {user: User}): Promise<IBooking[]> => {
+    const {title, start_time, end_time, item_ids} = args;
+    const bookerId = ctx.user.userid;
     return queryPromise(`
         INSERT INTO bookings (title, booker_id, start_time, end_time)
         VALUES ($1, $2, $3, $4)
-        RETURNING *;`, [title, booker_id, start_time, end_time])
+        RETURNING *;`, [title, bookerId, start_time, end_time])
     .then((results: pg.QueryResult) => {
         if (results.rows.length < 1) { throw new Error("Insert failed"); }
         results.rows.forEach((value: any) => {
@@ -151,7 +167,7 @@ const insertBooking = (args: BookingInput): Promise<IBooking[]> => {
     });
 };
 
-const acceptBooking = (args: {id: number, accept: boolean}): Promise<IBooking> => {
+const acceptBooking = (_: any, args: {id: number, accept: boolean}): Promise<IBooking> => {
     const {id, accept} = args;
     return queryPromise(`
         UPDATE bookings
@@ -164,7 +180,7 @@ const acceptBooking = (args: {id: number, accept: boolean}): Promise<IBooking> =
     });
 };
 
-const getBookings = (args: Paging): Promise<IBooking[]> => {
+const getBookings = (_: any, args: Paging): Promise<IBooking[]> => {
     const {page, maxItems} = args;
     return new Promise((resolve: any, reject: any) => pool.query(`
     SELECT id, title, booker_id, start_time, end_time, accepted
@@ -181,7 +197,7 @@ const getBookings = (args: Paging): Promise<IBooking[]> => {
     );
 };
 
-const getAcceptedBookings = (args: Paging): Promise<IBooking[]> => {
+const getAcceptedBookings = (_: any, args: Paging): Promise<IBooking[]> => {
     const {page, maxItems} = args;
     return new Promise((resolve: any, reject: any) => pool.query(`
     SELECT id, title, booker_id, start_time, end_time, accepted
@@ -199,7 +215,7 @@ const getAcceptedBookings = (args: Paging): Promise<IBooking[]> => {
     );
 };
 
-const getBookables = (args: Paging): Promise<IBookable[]> => {
+const getBookables = (_: any, args: Paging): Promise<IBookable[]> => {
     const {page, maxItems} = args;
     return new Promise((resolve: any, reject: any) => pool.query(`
     SELECT id, title, description, bookable_type
@@ -236,22 +252,52 @@ const getBookablesOfType = (bookableType: "lokal" | "inventarie",
     );
 };
 
-const root = {
-    acceptedBookings: getAcceptedBookings,
-    addBooking: insertBooking,
-    bookables: getBookables,
-    bookings: getBookings,
-    facilities: (args: Paging) => getBookablesOfType("lokal", args),
-    inventories: (args: Paging) => getBookablesOfType("inventarie", args),
-    setAccepted: acceptBooking,
+const resolvers = {
+    Bookable: {
+        bookings: getBookableBookings,
+    },
+    Booking: {
+        items: getBookingItems,
+    },
+    DateTime: GraphQLDateTime,
+    Mutation: {
+        addBooking: insertBooking,
+        setAccepted: acceptBooking,
+    },
+    Query: {
+        acceptedBookings: getAcceptedBookings,
+        bookables: getBookables,
+        bookings: getBookings,
+        facilities: (_: any, args: Paging) => getBookablesOfType("lokal", args),
+        inventories: (_: any, args: Paging) => getBookablesOfType("inventarie", args),
+    },
 };
+
+const schema = makeExecutableSchema({
+                                     resolvers,
+                                     schemaDirectives,
+                                     typeDefs,
+});
 
 const port = 8084;
 
+const getUser = (req: IncomingMessage) => {
+    const userHeader = req.headers["dsek-user"] as string; // should never be string[] (??)
+    return userHeader && JSON.parse(userHeader);
+};
+
 const app = express();
-app.use("/graphql", graphqlHTTP({
-    graphiql: process.env.NODE_ENV === "development",
-    rootValue: root,
-    schema,
+app.use("/graphql", graphqlHTTP((req: IncomingMessage) => {
+    const user = getUser(req);
+    const roles = user && user.permissions;
+    console.log("user", user);
+    return {
+        context: {
+            roles,
+            user,
+        },
+        graphiql: process.env.NODE_ENV === "development",
+        schema,
+    };
 }));
 app.listen(port, () => console.log(`login service listening on port ${port}`));
